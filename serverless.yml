@@ -1,0 +1,106 @@
+service: demo-python-http-api
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.9
+  memorySize: 256
+  role: arn:aws:iam::709220788877:role/admin
+  environment:
+    LICENSE_PLATES_TABLE_NAME: ${sls:stage}-t_license_plates
+    SALES_TABLE_NAME: ${sls:stage}-t_sales
+    FEE_BY_MINUTE: 0.03
+    ADMIN_EMAIL: juancarloscruzdiaz@gmail.com
+    LICENSE_PLATE_REGISTERED_TOPIC_NAME: ${sls:stage}-topic_license_plate_registered
+    SALE_REGISTERED_TOPIC_NAME: ${sls:stage}-topic_sale_registered
+    CREATE_QR_QUEUE_NAME: ${sls:stage}-queue_create_qr
+
+functions:
+  hello:
+    handler: services/registerLicensePlate.handler
+    events:
+      - s3:
+          bucket: demo-license-plates
+          event: s3:ObjectCreated:*
+          existing: true
+  calculate-price:
+    handler: services/calculatePrice.handler
+    events:
+      - httpApi:
+          path: /calculate-price
+          method: post
+  fullfill-service:
+    handler: services/fulfill.handler
+    events:
+      - httpApi:
+          path: /fulfill
+          method: post
+  gatekeeper:
+    handler: services/gatekeeper.handler
+    events:
+      - httpApi:
+          path: /gatekeeper
+          method: post
+  generate-ticket:
+    handler: services/generateTicket.handler
+    events:
+      - sqs:
+          arn: 
+            Fn::GetAtt: [CreateQRQueue, Arn]
+          batchSize: 1
+
+resources:
+  Resources:
+    CreateQRQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:provider.environment.CREATE_QR_QUEUE_NAME}
+    LicensePlateRegisteredTopic: 
+      Type: AWS::SNS::Topic
+      Properties: 
+        Subscription: 
+          - Endpoint: ${self:provider.environment.ADMIN_EMAIL}
+            Protocol: "email"
+          - Endpoint: 
+              Fn::GetAtt: [CreateQRQueue, Arn]
+            Protocol: sqs
+        TopicName: ${self:provider.environment.LICENSE_PLATE_REGISTERED_TOPIC_NAME}
+    SaleRegisteredTopic:
+      Type: AWS::SNS::Topic
+      Properties: 
+        Subscription: 
+          - Endpoint: ${self:provider.environment.ADMIN_EMAIL}
+            Protocol: "email"
+        TopicName: ${self:provider.environment.SALE_REGISTERED_TOPIC_NAME}
+    LicensePlatesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.LICENSE_PLATES_TABLE_NAME}
+        AttributeDefinitions:
+          - AttributeName: branch_id
+            AttributeType: S
+          - AttributeName: license_plate
+            AttributeType: S
+        KeySchema:
+          - AttributeName: branch_id
+            KeyType: HASH
+          - AttributeName: license_plate
+            KeyType: RANGE
+        # Set the capacity to auto-scale
+        BillingMode: PAY_PER_REQUEST
+    SalesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.SALES_TABLE_NAME}
+        AttributeDefinitions:
+          - AttributeName: branch_id
+            AttributeType: S
+          - AttributeName: sale_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: branch_id
+            KeyType: HASH
+          - AttributeName: sale_id
+            KeyType: RANGE
+        # Set the capacity to auto-scale
+        BillingMode: PAY_PER_REQUEST
